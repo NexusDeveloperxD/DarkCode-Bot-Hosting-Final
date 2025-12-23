@@ -17,7 +17,7 @@ const Footer = () => {
         <div className="flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
             <span className="text-sm text-gray-400">
-              © 2025 Dark Code Bot Hosting. All rights reserved.
+              © 2025 DarkCode Bot Hosting. All rights reserved.
             </span>
           </div>
 
