@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   MessageSquare, Search, Filter, CheckCircle, Clock, AlertCircle, 
-  User, Send, MoreHorizontal, FileText, ChevronRight, X, Loader2
+  User, Send, MoreHorizontal, FileText, ChevronRight, X, Loader2, Trash2
 } from 'lucide-react';
 import { supabase } from '@/lib/customSupabaseClient';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
@@ -103,18 +103,26 @@ const TeamSupportDashboard = () => {
 
     loadData();
     
-    // Realtime subscription for new tickets
+    // Realtime subscription deaktiviert, um Probleme mit dem Löschen zu beheben
+    /*
     const channel = supabase
       .channel('support_dashboard_main')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'support_tickets' }, (payload) => {
-        // Refresh list on any change to keep data consistent
-        fetchTickets();
+        // Nur neue Tickets laden, keine Updates oder Löschungen
+        if (payload.eventType === 'INSERT') {
+          fetchTickets();
+        }
       })
       .subscribe();
       
     return () => {
         mounted = false;
         supabase.removeChannel(channel);
+    };
+    */
+    
+    return () => {
+      mounted = false;
     };
   }, []); // Only run once on mount
 
@@ -246,6 +254,94 @@ const TeamSupportDashboard = () => {
     }
   };
 
+  const handleDeleteTicket = async (ticketId) => {
+    console.log('handleDeleteTicket aufgerufen mit ID:', ticketId);
+    
+    if (!ticketId) {
+      console.error('Keine Ticket-ID zum Löschen angegeben');
+      return false;
+    }
+    
+    try {
+      if (!window.confirm('Möchtest du dieses Ticket wirklich dauerhaft löschen?')) {
+        console.log('Löschen vom Benutzer abgebrochen');
+        return false;
+      }
+
+      console.log('Starte Löschvorgang...');
+      setLoading(true);
+
+      // 1. Lösche das Ticket direkt aus dem State
+      setTickets(prevTickets => {
+        const updatedTickets = prevTickets.filter(t => t.id !== ticketId);
+        console.log('Ticket aus dem lokalen State entfernt. Verbleibende Tickets:', updatedTickets.length);
+        return updatedTickets;
+      });
+
+      // 2. Lösche zuerst die Antworten in der Datenbank
+      console.log('Lösche Antworten für Ticket:', ticketId);
+      const { error: repliesError } = await supabase
+        .from('ticket_replies')
+        .delete()
+        .eq('ticket_id', ticketId);
+      
+      if (repliesError) {
+        console.error('Fehler beim Löschen der Antworten:', repliesError);
+        // Bei Fehler die Tickets neu laden, um Konsistenz zu gewährleisten
+        await fetchTickets();
+        throw repliesError;
+      }
+      console.log('Antworten erfolgreich gelöscht');
+
+      // 3. Lösche das Ticket in der Datenbank
+      console.log('Lösche Ticket:', ticketId);
+      const { error: ticketError } = await supabase
+        .from('support_tickets')
+        .delete()
+        .eq('id', ticketId);
+
+      if (ticketError) {
+        console.error('Fehler beim Löschen des Tickets:', ticketError);
+        // Bei Fehler die Tickets neu laden, um Konsistenz zu gewährleisten
+        await fetchTickets();
+        throw ticketError;
+      }
+      console.log('Ticket erfolgreich gelöscht');
+      
+      // 4. Schließe die Detailansicht, falls das gelöschte Ticket ausgewählt war
+      if (selectedTicket && selectedTicket.id === ticketId) {
+        console.log('Schließe Detailansicht');
+        setSelectedTicket(null);
+      }
+
+      // 5. Zeige Erfolgsmeldung
+      toast({ 
+        title: "Ticket gelöscht", 
+        description: "Das Ticket wurde erfolgreich gelöscht." 
+      });
+
+      return true;
+    } catch (error) {
+      console.error('Fehler beim Löschen des Tickets:', {
+        error,
+        message: error.message,
+        code: error.code,
+        details: error.details,
+        hint: error.hint
+      });
+      
+      toast({ 
+        title: "Fehler", 
+        description: `Das Ticket konnte nicht gelöscht werden: ${error.message}`,
+        variant: "destructive" 
+      });
+      return false;
+    } finally {
+      console.log('Löschvorgang abgeschlossen');
+      setLoading(false);
+    }
+  };
+
   const handleAssign = async (userId) => {
     if (!selectedTicket) return;
     try {
@@ -356,6 +452,7 @@ const TeamSupportDashboard = () => {
           <div className="relative">
             <Search className="absolute left-3 top-2.5 w-4 h-4 text-gray-500" />
             <Input 
+              id="ticket-search-input"
               placeholder="Suche Tickets..." 
               className="pl-9 bg-black/20 border-violet-500/10"
               value={search}
@@ -425,21 +522,33 @@ const TeamSupportDashboard = () => {
           <>
             {/* Header */}
             <div className="p-6 border-b border-violet-500/20 flex flex-col gap-4">
-              <div className="flex justify-between items-start">
-                <button className="md:hidden text-gray-400 hover:text-white" onClick={() => setSelectedTicket(null)}>
-                  <ChevronRight className="w-6 h-6 rotate-180" />
-                </button>
-                <div className="flex-1 ml-2 md:ml-0">
-                  <div className="flex items-center gap-3 mb-2">
-                    <h2 className="text-xl font-bold text-white">{selectedTicket.subject}</h2>
-                    <PriorityBadge priority={selectedTicket.priority} />
-                  </div>
-                  <div className="flex items-center gap-2 text-sm text-gray-400">
-                    <span>Ticket #{selectedTicket.id.slice(0, 8)}</span>
-                    <span>•</span>
-                    <span>von {getProfileName(selectedTicket)}</span>
+              <div className="flex justify-between items-start w-full">
+                <div className="flex items-start gap-2 flex-1">
+                  <button className="md:hidden text-gray-400 hover:text-white mt-1" onClick={() => setSelectedTicket(null)}>
+                    <ChevronRight className="w-6 h-6 rotate-180" />
+                  </button>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-3 mb-2">
+                      <h2 className="text-xl font-bold text-white">{selectedTicket.subject}</h2>
+                      <PriorityBadge priority={selectedTicket.priority} />
+                    </div>
+                    <div className="flex items-center gap-2 text-sm text-gray-400">
+                      <span>Ticket #{selectedTicket.id.slice(0, 8)}</span>
+                      <span>•</span>
+                      <span>von {getProfileName(selectedTicket)}</span>
+                    </div>
                   </div>
                 </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-red-500 border-red-500/30 hover:bg-red-500/10 hover:text-red-400 ml-2"
+                  onClick={() => handleDeleteTicket(selectedTicket.id)}
+                  disabled={loading}
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span className="hidden sm:inline ml-2">Ticket löschen</span>
+                </Button>
               </div>
 
               <div className="flex flex-wrap gap-3">
@@ -544,6 +653,7 @@ const TeamSupportDashboard = () => {
             <div className="p-4 bg-[#141422] border-t border-violet-500/20">
                <div className="flex gap-2">
                  <Input 
+                   id="ticket-reply-input"
                    placeholder="Antwort schreiben..." 
                    className="flex-1"
                    value={newReply}
